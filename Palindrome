@@ -1,0 +1,30 @@
+// without using for loop
+
+public bool IsPalindrome(int x) {
+ char[] y = x.ToString().ToCharArray();
+Array.Reverse(y);
+if(x.ToString() != new string(y))
+    return false;
+else
+    return true;
+    }
+
+// with for loop
+ public bool IsPalindrome(int x) {
+        //x= x < 0 ? x * -1 : x;
+bool ispalindrom = true;
+string str = x.ToString();
+for(int i = 0; i< str.Length; i++)
+{
+    if( i == (str.Length - 1) - i)
+    {
+        break;
+    }
+    if (str[i] != str[(str.Length-1) - i])
+    {
+        ispalindrom = false;
+    }
+}
+
+return  ispalindrom;
+    }
