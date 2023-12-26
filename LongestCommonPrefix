@@ -1,0 +1,31 @@
+//With O(n2)
+
+public class Solution {
+    public string LongestCommonPrefix(string[] str) {
+       string maxPrefix = str[0];
+
+if (str.Length == 1 && str[0] != string.Empty)
+{
+    maxPrefix = str[0];
+    return maxPrefix;
+}
+for(int i = 1; i < str.Length; i++)
+{
+    string temp = maxPrefix;
+    maxPrefix = string.Empty;
+    int count = temp.Length > str[i].Length ? str[i].Length : temp.Length;
+    for(int j = 0; j < count; j++)
+    {
+        if (temp[j] == str[i][j])
+        {
+            maxPrefix = maxPrefix + str[i][j];
+        }
+        else
+        {
+            break;
+        }
+    }
+}
+return maxPrefix;
+    }
+}
