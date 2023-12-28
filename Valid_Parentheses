@@ -1,0 +1,75 @@
+public class Solution {
+public bool IsValid(string s) {
+bool isvalid = false;
+stack _stk = new stack(s.Length);
+string[] _stkArr = _stk.GetStack();
+foreach (char c in s)
+{
+    if(c == '(' || c == '{' || c == '[')
+    {
+        _stk.push(c.ToString());
+    }
+    else
+    {
+        string _str = _stk.pull();
+        if(c == ')' && _str == "(")
+            isvalid = true;
+        else if (c == '}' && _str == "{")
+            isvalid = true;
+        else if (c == ']' && _str == "[")
+            isvalid = true;
+        else
+        {
+            isvalid = false;
+            break;
+        }
+            
+    }
+}
+if (_stkArr[0] != null)
+{
+    isvalid = false;
+}
+return isvalid;
+}
+}
+
+class stack
+{
+    string[] _stack;
+
+    stack()
+    {
+        _stack = new string[500];
+    }
+    public stack(int stackSize)
+    {
+        _stack = new string[stackSize];
+    }
+   
+    int Count = 0;
+    public bool push(string c)
+    {
+        _stack[Count] = c;
+        Count++;
+        return true;
+           
+    }
+    public string pull()
+    {
+        if(Count != 0)
+        {
+            string str = _stack[Count-1];
+            _stack[Count - 1] = null;
+            Count = Count - 1;
+            return str;
+        }
+        else return string.Empty;
+        
+    }
+
+    public string[] GetStack()
+    {
+        return _stack;
+    }
+}
