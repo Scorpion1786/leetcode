@@ -1,3 +1,5 @@
+// accepted parantheses {},(),[].
+// also they should be in order like {([])}, ([)] is not accepted.
 public class Solution {
 public bool IsValid(string s) {
 bool isvalid = false;
