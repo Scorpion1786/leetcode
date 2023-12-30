@@ -1,0 +1,41 @@
+// Input: haystack = "sadbutsad", needle = "sad"
+// Output: 0
+// Explanation: "sad" occurs at index 0 and 6.
+// The first occurrence is at index 0, so we return 0.
+
+public class Solution {
+    public int StrStr(string haystack, string needle) {
+        int poiner = -1;
+if(needle.Length > haystack.Length)
+    return poiner;
+else
+{
+    List<int> index = new List<int>();
+   for(int i = 0; i < haystack.Length; i++)
+    {
+        if (haystack[i] == needle[0])
+        {
+            index.Add(i);
+        }
+    }
+   foreach(int i in index)
+    {
+        StringBuilder SB = new StringBuilder();
+        for(int j = i; j <haystack.Length; j++)
+        {
+            SB.Append(haystack[j]);
+            if(SB.ToString() == needle)
+            {
+                poiner = i;
+                break;
+            }
+                
+        }
+       if(poiner >= 0)
+            break;
+
+    }
+    return poiner;
+}
+    }
+}
