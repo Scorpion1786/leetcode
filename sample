@@ -1,0 +1,341 @@
+using AppLibrary;
+using Azure.Storage.Blobs;
+using ExcelDataReader;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Azure.WebJobs;
+using Microsoft.Azure.WebJobs.Extensions.Http;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
+
+namespace fn_ResourceTagger
+{
+    public static class ResourceTagger
+    {
+
+        public static string ClientID = Environment.GetEnvironmentVariable("ClientID");
+        public static string TenantID = Environment.GetEnvironmentVariable("TenantID");
+        public static string auth_url = Environment.GetEnvironmentVariable("auth_url");
+        public static string resource = Environment.GetEnvironmentVariable("resource");
+        public static string CostManagementURL = Environment.GetEnvironmentVariable("CostManagementURL");
+        public static string FileLocation = Environment.GetEnvironmentVariable("FileLocation");
+        public static DataTable dt_costtable = null;
+        public static DataTable dt_RSTagger = null;
+        public static ILogger _log = null;
+        [FunctionName("ResourceTagger")]
+        public static async Task<IActionResult> Run([HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = null)] HttpRequest req,ILogger log)
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            _log = log;
+            _log.LogInformation("C# HTTP trigger function processed a request.");
+
+            try
+            {
+
+                bool CostReport = await GetCostDetails("Audit_AME_Preprod");
+                bool ResourceData = await GetResourceTaggerData();
+                if (CostReport && ResourceData)
+                {
+                    dt_RSTagger.Columns["SUBSCRIPTION"].ColumnName = "SubscriptionName";
+                    dt_RSTagger.Columns["RESOURCE GROUP NAME"].ColumnName = "ResourceGroupName";
+                    List<string> ColumnToKeep = new List<string>() { "SubscriptionName", "ResourceGroupName" };
+                    DataTableCleaning(ColumnToKeep, ref dt_costtable, "dt_CostTable");
+                    DataTableCleaning(ColumnToKeep, ref dt_RSTagger, "dt_RSTagger");
+                    DataTable dt_result = GetNewlyCreatedResource();
+                }
+                var result = new ObjectResult(new { StatusCodes = StatusCodes.Status200OK, Message = $"Hello, {DateTime.Today.AddDays(-1).ToString("yyyy-MM-dd'T'00:00:00'Z'")}. This HTTP triggered function executed successfully" });
+                result.StatusCode = StatusCodes.Status200OK;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                var result = new ObjectResult(new { StatusCodes = StatusCodes.Status500InternalServerError, Message = $"Exception Message: {ex.Message}" });
+                result.StatusCode = StatusCodes.Status500InternalServerError;
+                return result;
+            }
+        }
+
+        public static async Task<bool> GetCostDetails(string Env)
+        {
+            _log.LogInformation("Fetching CostReport Data");
+            var accessToken = await GetAccessToken().ConfigureAwait(false);
+            if (string.IsNullOrEmpty(accessToken))
+            {
+                throw new Exception("Invalid AccessToken");
+            }
+
+            var generic = new GenericClass();
+            var newdata = generic.GetRequestBody();
+            var content = new StringContent(newdata, Encoding.UTF8, "application/json");
+
+            using (var client = new HttpClient())
+            {
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                client.DefaultRequestHeaders.Add("X-Ms-Command-Name", "CostAnalysis");
+
+                try
+                {
+                    var response = await client.PostAsync(CostManagementURL.Replace("{Environment}", Env), content).ConfigureAwait(false);
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                        var result = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        var costAnalysis = System.Text.Json.JsonSerializer.Deserialize<CostAnalysis>(result, options);
+                        return await CreateCostReport(costAnalysis);
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                catch
+                {
+                    throw;
+                }
+            }
+
+        }
+
+        public static async Task<string> GetAccessToken()
+        {
+            var kvHelper = new KeyVaultHelper();
+            _log.LogInformation("Getting Access Token....");
+            var data = new Dictionary<string, string>
+                                                    {
+                                                        { "grant_type", "client_credentials" },
+                                                        { "client_id", ClientID },
+                                                        { "client_secret", await kvHelper.GetKeyValue("ClientSecret") },
+                                                        { "resource", resource }
+                                                    };
+            var content = new FormUrlEncodedContent(data);
+            using (var client = new HttpClient())
+            {
+                try
+                {
+                    var response = await client.PostAsync(auth_url.Replace("{TenantID}", TenantID), content).ConfigureAwait(false);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var result = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        var token = System.Text.Json.JsonSerializer.Deserialize<Token>(result);
+                        _log.LogInformation($"Token acquired, Length {token.access_token.Length}....");
+                        return token.access_token;
+                    }
+                    else
+                    {
+                        return string.Empty;
+                    }
+                }
+                catch
+                {
+                    throw;
+                }
+            }
+        }
+
+        public static async Task<bool> CreateCostReport(CostAnalysis _obj)
+        {
+            try
+            {
+                _log.LogInformation("Creating CostReport....");
+                dt_costtable = new DataTable();
+                var sb = new StringBuilder();
+
+                // Add columns to DataTable and append column names to StringBuilder
+                var columnNames = _obj.Properties.Columns.Select(col => col.Name).ToArray();
+                foreach (var colName in columnNames)
+                {
+                    dt_costtable.Columns.Add(new DataColumn(colName));
+                }
+                sb.AppendLine(string.Join(",", columnNames));
+
+                // Add rows to DataTable and append row values to StringBuilder
+                foreach (var row in _obj.Properties.Rows)
+                {
+                    var dr = dt_costtable.NewRow();
+                    for (int j = 0; j < row.Length; j++)
+                    {
+                        dr[j] = row[j].ToString();
+                    }
+                    dt_costtable.Rows.Add(dr);
+                    sb.AppendLine(string.Join(",", row.Select(cell => cell.ToString())));
+                }
+                await UploadFileToBlob(Encoding.ASCII.GetBytes(sb.ToString()));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                throw new Exception(ex.Message);
+            }
+        }
+
+        public static async Task<bool> UploadFileToBlob(byte[] buffer)
+        {
+            try
+            {
+                _log.LogInformation($"Uploading File {DateTime.Today.AddDays(-1).ToString("yyyy-MM-dd") + ".csv"} to blob");
+                BlobClient blobclient = BlobHelper.GetContainerClient().GetBlobClient(DateTime.Today.AddDays(-1).ToString("yyyy-MM-dd") + ".csv");
+                using (var ms = new MemoryStream(buffer, true))
+                {
+                    await blobclient.UploadAsync(ms);
+                }
+                return true;
+            }
+            catch
+            {
+                throw;
+            }
+        }
+
+        public static async Task<bool> GetResourceTaggerData()
+        {
+            try
+            {
+                _log.LogInformation($"Fetching Resource Tagger info from Blob");
+                BlobClient blobclient = BlobHelper.GetContainerClient().GetBlobClient("Resource_Group_Tagger.xlsx");
+                using (var ms = new MemoryStream())
+                {
+                    await blobclient.DownloadToAsync(ms);
+                    ms.Position = 0;
+                    ReadExcelFileToTable(ms);
+                    //FileStream outputStream = new FileStream(@"C:\\Users\\sudeol\\source\\Output.xlsx", FileMode.Create, FileAccess.Write);
+                    //ms.CopyTo(outputStream);
+                }
+                return true;
+            }
+            catch
+            {
+                throw;
+            }
+        }
+
+        public static void ReadExcelFileToTable(Stream stream)
+        {
+            try
+            {
+                _log.LogInformation($"Loading Resource Tagger info to DataTable...");
+                using (var reader = ExcelReaderFactory.CreateReader(stream))
+                {
+                    var result = reader.AsDataSet();
+                    DataTable originalDataTable = result.Tables[0]; 
+                    dt_RSTagger = new DataTable();
+                    for (int i = 0; i < originalDataTable.Columns.Count; i++)
+                    {
+                        dt_RSTagger.Columns.Add(originalDataTable.Rows[0][i].ToString());
+                    }
+
+                    for (int i = 1; i < originalDataTable.Rows.Count; i++)
+                    {
+                        dt_RSTagger.Rows.Add(originalDataTable.Rows[i].ItemArray);
+                    }
+                }
+            }
+            catch
+            {
+                throw;
+            }
+        }
+
+        public static void DataTableCleaning(List<string> ColumnToKeep, ref DataTable dt, string TableName)
+        {
+            try
+            {
+                _log.LogInformation($"Data Cleaning in Progress for Table {TableName}");
+                var toRemove = new List<DataColumn>();
+                DataTable dttemp = dt;
+                foreach (DataColumn column in dttemp.Columns)
+                {
+                    if (!ColumnToKeep.Any(name => column.ColumnName == name))
+                    {
+                        toRemove.Add(column);
+                    }
+                }
+                toRemove.ForEach(col => dttemp.Columns.Remove(col));
+
+                DataView view = new DataView(dttemp);
+                DataTable distinctTable = view.ToTable(true);
+                dt = distinctTable;
+            }
+            catch
+            {
+                throw;
+            }
+        }
+
+        public static DataTable GetNewlyCreatedResource()
+        {
+            try
+            {
+                _log.LogInformation($"Getting newly Created Resource Group...");
+                DataTable result = new DataTable();
+                result.Columns.Add("SubscriptionName", typeof(string));
+                result.Columns.Add("ResourceGroupName", typeof(string));
+                var query = from row1 in dt_costtable.AsEnumerable()
+                            join row2 in dt_RSTagger.AsEnumerable()
+                            on new { SubscriptionName = row1.Field<string>("SubscriptionName"), ResourceGroupName = row1.Field<string>("ResourceGroupName") }
+                            equals new { SubscriptionName = row2.Field<string>("SubscriptionName"), ResourceGroupName = row2.Field<string>("ResourceGroupName") }
+                            into gj
+                            from subrow in gj.DefaultIfEmpty()
+                            select new
+                            {
+                                SubscriptionName = row1.Field<string>("SubscriptionName"),
+                                ResourceGroupName = row1.Field<string>("ResourceGroupName"),
+                            };
+                foreach (var row in query)
+                {
+                    result.Rows.Add(row.SubscriptionName, row.ResourceGroupName);
+                }
+                return result;
+            }
+            catch
+            {
+                throw;
+            }
+        }
+
+        public static async Task<bool> SendMessageOnTeams(DataTable dt)
+        {
+            try
+            {
+                _log.LogInformation($"Sending Message on Teams...");
+                var _generic = new GenericClass();
+                string csvdata = _generic.ConvertDatatableToStringBuilder(dt).ToString();
+
+                // Read the CSV file and convert it to a base64 string
+                string base64Csv = Convert.ToBase64String(Encoding.ASCII.GetBytes(csvdata.ToString()));
+
+                // Teams webhook URL
+                string webhookUrl = "https://deloitte.webhook.office.com/webhookb2/3e3406e3-bfdb-4153-b0d3-ac4689e0422c@36da45f1-dd2c-4d1f-af13-5abe46b99921/IncomingWebhook/2f0e3265c4794534b81f1ec6d3b1ae20/291cf69e-5104-4a43-ab8a-9a5331135c27";
+
+                // Send the payload to the Teams webhook
+                using (HttpClient client = new HttpClient())
+                {
+                    var content = new StringContent(_generic.GetPayloadForTeam(base64Csv), Encoding.UTF8, "application/json");
+                    HttpResponseMessage response = await client.PostAsync(webhookUrl, content);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        Console.WriteLine("Message sent successfully.");
+                    }
+                    else
+                    {
+                        Console.WriteLine("Failed to send message. Status code: " + response.StatusCode);
+                    }
+                }
+                return true;
+            }
+            catch
+            {
+                throw;
+            }
+        }
+    }
+}
