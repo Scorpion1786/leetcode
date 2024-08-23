@@ -1,0 +1,243 @@
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
+using Azure.Storage.Blobs;
+using System.Data;
+using System.Text;
+
+namespace AppLibrary
+{
+    public class GenericClass
+    {
+        static string FromDate = DateTime.Today.AddDays(-1).ToString("yyyy-MM-dd'T'00:00:00'Z'");
+        static string Todate = DateTime.Today.AddDays(-1).ToString("yyyy-MM-dd'T'23:59:59'Z'");
+        string RequestData = $@"
+                                {{
+                                    ""type"": ""Usage"",
+                                    ""timeframe"": ""Custom"",
+                                    ""timePeriod"": {{
+                                        ""from"": ""{FromDate}"",
+                                        ""to"": ""{Todate}""
+                                    }},
+                                    ""dataset"": {{
+                                        ""granularity"": ""None"",
+                                        ""aggregation"": {{
+                                            ""totalCost"": {{
+                                                ""name"": ""Cost"",
+                                                ""function"": ""Sum""
+                                            }}
+                                        }},
+                                        ""grouping"": [
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""SubscriptionId""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""SubscriptionName""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""ResourceGroupName""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""ResourceId""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""ResourceType""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""ResourceLocation""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""ServiceName""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""ServiceTier""
+                                            }}            
+                                        ]
+                                    }}
+                                }}";
+        public string GetRequestBody()
+        {
+            return RequestData;
+        }
+        public string GetPayloadForTeam(string base64Csv)
+        {
+            string jsonPayload = $@"
+                                    {{
+                                        ""type"": ""message"",
+                                        ""attachments"": [
+                                            {{
+                                                ""contentType"": ""application/vnd.microsoft.card.adaptive"",
+                                                ""content"": {{
+                                                    ""type"": ""AdaptiveCard"",
+                                                    ""body"": [
+                                                        {{
+                                                            ""type"": ""TextBlock"",
+                                                            ""text"": ""Hello, please find the attached CSV file.""
+                                                        }},
+                                                        {{
+                                                            ""type"": ""TextBlock"",
+                                                            ""text"": ""<at>Everyone</at>""
+                                                        }},
+                                                        {{
+                                                            ""type"": ""TextBlock"",
+                                                            ""text"": ""CSV File:""
+                                                        }},
+                                                        {{
+                                                            ""type"": ""TextBlock"",
+                                                            ""text"": ""{base64Csv}""
+                                                        }}
+                                                    ],
+                                                    ""$schema"": ""http://adaptivecards.io/schemas/adaptive-card.json"",
+                                                    ""version"": ""1.0"",
+                                                    ""msteams"": {{
+                                                        ""entities"": [
+                                                            {{
+                                                                ""type"": ""mention"",
+                                                                ""text"": ""<at>Everyone</at>"",
+                                                                ""mentioned"": {{
+                                                                    ""id"": ""everyone@deloitte.com"",
+                                                                    ""name"": ""Everyone""
+                                                                }}
+                                                            }}
+                                                        ]
+                                                    }}
+                                                }}
+                                            }}
+                                        ]
+                                    }}";
+            return jsonPayload;
+        }
+        public StringBuilder ConvertDatatableToStringBuilder(DataTable dt)
+        {
+            StringBuilder csvContent = new StringBuilder();
+
+            // Write column headers
+            for (int i = 0; i < dt.Columns.Count; i++)
+            {
+                csvContent.Append(dt.Columns[i]);
+                if (i < dt.Columns.Count - 1)
+                    csvContent.Append(",");
+            }
+            csvContent.AppendLine();
+
+            // Write rows
+            foreach (DataRow row in dt.Rows)
+            {
+                for (int i = 0; i < dt.Columns.Count; i++)
+                {
+                    csvContent.Append(row[i].ToString());
+                    if (i < dt.Columns.Count - 1)
+                        csvContent.Append(",");
+                }
+                csvContent.AppendLine();
+            }
+            return csvContent;
+        }
+    }
+
+    public class CostAnalysis
+    {
+        public string? Id { get; set; }
+        public string? Name { get; set; }
+        public string? Type { get; set; }
+        public object? Location { get; set; }
+        public object? Sku { get; set; }
+        public object? ETag { get; set; }
+        public Properties? Properties { get; set; }
+    }
+
+    public class Properties
+    {
+        public string? NextLink { get; set; }
+        public Column[]? Columns { get; set; }
+        public object[][]? Rows { get; set; }
+    }
+
+    public class Column
+    {
+        public string? Name { get; set; }
+        public string? Type { get; set; }
+    }
+
+    public class Token
+    {
+        public string? token_type { get; set; }
+        public string? expires_in { get; set; }
+        public string? ext_expires_in { get; set; }
+        public string? expires_on { get; set; }
+        public string? not_before { get; set; }
+        public string? resource { get; set; }
+        public string? access_token { get; set; }
+    }
+}
+
+public class BlobHelper
+{
+    public static BlobContainerClient GetContainerClient()
+    {
+        try
+        {
+            string? storageAccountName = Environment.GetEnvironmentVariable("StorageaccountName");
+            string? containerName = Environment.GetEnvironmentVariable("ContainerName");
+
+            BlobServiceClient blobServiceClient;
+
+            if (Convert.ToBoolean(Environment.GetEnvironmentVariable("isDevEnvironment")))
+            {
+                string blobConnectionString = string.Format(Environment.GetEnvironmentVariable("BlobConnectionString"), storageAccountName, Environment.GetEnvironmentVariable("StorageAccessKey"));
+                blobServiceClient = new BlobServiceClient(blobConnectionString);
+            }
+            else
+            {
+                var credentialOptions = new DefaultAzureCredentialOptions
+                {
+                    ManagedIdentityClientId = Environment.GetEnvironmentVariable("userAssignedClientId"),
+
+                };
+                var saUri = $"https://{storageAccountName}.blob.core.windows.net";
+                blobServiceClient = new BlobServiceClient(new Uri(saUri), new DefaultAzureCredential(credentialOptions));
+            }
+            BlobContainerClient containerClient = blobServiceClient.GetBlobContainerClient(containerName);
+            return containerClient;
+        }
+        catch
+        {
+            throw;
+        }
+
+
+    }
+}
+
+public class KeyVaultHelper
+{
+    public async Task<string> GetKeyValue(string keyname)
+    {
+        string keyVaultUrl = $"https://{Environment.GetEnvironmentVariable("KeyVaultName")}.vault.azure.net/";
+
+        var credentialOptions = new DefaultAzureCredentialOptions
+        {
+            ManagedIdentityClientId = Environment.GetEnvironmentVariable("userAssignedClientId"),
+
+        };
+        var client = new SecretClient(new Uri(keyVaultUrl), new DefaultAzureCredential(credentialOptions));
+
+        try
+        {
+            KeyVaultSecret secret = await client.GetSecretAsync(keyname);
+
+            return secret.Value;
+        }
+        catch 
+        {
+            throw;
+        }
+    }
+}
