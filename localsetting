@@ -1,0 +1,23 @@
+{
+    "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_INPROC_NET8_ENABLED": "1",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet",
+    "CLIENT_ID": "",
+    "TENANT_ID": "",
+    "CLIENT_SECRET": "",
+    "AUTH_URL": "https://login.microsoftonline.com/{TenantID}/oauth2/token",
+    "RESOURCE": "https://management.azure.com/",
+    "COST_MANAGEMENT_URL": "https://management.azure.com/providers/Microsoft.Management/managementGroups/{Environment}/providers/Microsoft.CostManagement/query?api-version=2023-11-01",
+    "STORAGE_ACCOUNT_NAME": "demostorageaccounttagger",
+    "STORAGE_ACCESS_KEY": "",
+    "CONTAINER_NAME": "costexportmanual",
+    "BLOB_CONNECTION_STRING": "DefaultEndpointsProtocol=https;AccountName={0};AccountKey={1};EndpointSuffix=core.windows.net",
+    "IS_DEV_ENVIRONMENT": true,
+    "USER_ASSIGNED_CLIENT_ID": "",
+    "KEY_VAULT_NAME": "resourceTagger-kv",
+    "WEBHOOK_URL": "",
+    "BROADCAST_RESOURCE_DETAILS": "false"
+  }
+}
