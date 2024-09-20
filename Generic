@@ -1,0 +1,499 @@
+using AppLibrary;
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
+using Azure.Storage.Blobs;
+using ExcelDataReader;
+using System.Data;
+using System.Text;
+using Newtonsoft.Json.Linq;
+using Kusto.Data;
+using Kusto.Data.Net.Client;
+using Kusto.Data.Common;
+
+namespace AppLibrary
+{
+    public class GenericClass
+    {
+        static string FromDate = DateTime.Today.AddDays(-1).ToString("yyyy-MM-dd'T'00:00:00'Z'");
+        static string Todate = DateTime.Today.AddDays(-1).ToString("yyyy-MM-dd'T'23:59:59'Z'");
+        string RequestData = $@"
+                                {{
+                                    ""type"": ""Usage"",
+                                    ""timeframe"": ""Custom"",
+                                    ""timePeriod"": {{
+                                        ""from"": ""{FromDate}"",
+                                        ""to"": ""{Todate}""
+                                    }},
+                                    ""dataset"": {{
+                                        ""granularity"": ""None"",
+                                        ""aggregation"": {{
+                                            ""totalCost"": {{
+                                                ""name"": ""Cost"",
+                                                ""function"": ""Sum""
+                                            }}
+                                        }},
+                                        ""grouping"": [
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""SubscriptionId""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""SubscriptionName""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""ResourceGroupName""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""ResourceId""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""ResourceType""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""ResourceLocation""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""ServiceName""
+                                            }},
+                                            {{
+                                                ""type"": ""Dimension"",
+                                                ""name"": ""ServiceTier""
+                                            }}            
+                                        ]
+                                    }}
+                                }}";
+        public string GetRequestBody()
+        {
+            return RequestData;
+        }
+        public string GetPayloadForTeam(string base64Csv)
+        {
+            string jsonPayload = $@"
+                                    {{
+                                        ""type"": ""message"",
+                                        ""attachments"": [
+                                            {{
+                                                ""contentType"": ""application/vnd.microsoft.card.adaptive"",
+                                                ""content"": {{
+                                                    ""type"": ""AdaptiveCard"",
+                                                    ""body"": [
+                                                        {{
+                                                            ""type"": ""TextBlock"",
+                                                            ""text"": ""Hello, please find the attached CSV file.""
+                                                        }},
+                                                        {{
+                                                            ""type"": ""TextBlock"",
+                                                            ""text"": ""<at>Everyone</at>""
+                                                        }},
+                                                        {{
+                                                            ""type"": ""TextBlock"",
+                                                            ""text"": ""CSV File:""
+                                                        }},
+                                                        {{
+                                                            ""type"": ""TextBlock"",
+                                                            ""text"": ""{base64Csv}""
+                                                        }}
+                                                    ],
+                                                    ""$schema"": ""http://adaptivecards.io/schemas/adaptive-card.json"",
+                                                    ""version"": ""1.0"",
+                                                    ""msteams"": {{
+                                                        ""entities"": [
+                                                            {{
+                                                                ""type"": ""mention"",
+                                                                ""text"": ""<at>Everyone</at>"",
+                                                                ""mentioned"": {{
+                                                                    ""id"": ""everyone@deloitte.com"",
+                                                                    ""name"": ""Everyone""
+                                                                }}
+                                                            }}
+                                                        ]
+                                                    }}
+                                                }}
+                                            }}
+                                        ]
+                                    }}";
+            return jsonPayload;
+        }
+        public StringBuilder ConvertDatatableToStringBuilder(DataTable dt)
+        {
+            StringBuilder SB = new StringBuilder();
+
+            // Write column headers
+            for (int i = 0; i < dt.Columns.Count; i++)
+            {
+                SB.Append(dt.Columns[i]);
+                if (i < dt.Columns.Count - 1)
+                    SB.Append(",");
+            }
+            SB.AppendLine();
+
+            // Write rows
+            foreach (DataRow row in dt.Rows)
+            {
+                for (int i = 0; i < dt.Columns.Count; i++)
+                {
+                    SB.Append(row[i].ToString());
+                    if (i < dt.Columns.Count - 1)
+                        SB.Append(",");
+                }
+                SB.AppendLine();
+            }
+            return SB;
+        }
+
+        public StringBuilder ConvertDataTableToMarkdownTable(DataTable dataTable)
+        {
+            StringBuilder sb = new StringBuilder();
+
+            // Add column headers
+            foreach (DataColumn column in dataTable.Columns)
+            {
+                sb.Append("| " + column.ColumnName + " ");
+            }
+            sb.AppendLine("|");
+
+            // Add separator line
+            foreach (DataColumn column in dataTable.Columns)
+            {
+                sb.Append("|---");
+            }
+            sb.AppendLine("|");
+
+            // Add rows
+            foreach (DataRow row in dataTable.Rows)
+            {
+                foreach (var item in row.ItemArray)
+                {
+                    sb.Append("| " + item + " ");
+                }
+                sb.AppendLine("|");
+            }
+
+            return sb;
+        }
+
+        public DataTable ReadExcelToDataTable(string filePath, string sheetName)
+        {
+            System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+
+            using (var stream = File.Open(filePath, FileMode.Open, FileAccess.Read))
+            {
+                using (var reader = ExcelReaderFactory.CreateReader(stream))
+                {
+                    var result = reader.AsDataSet(new ExcelDataSetConfiguration()
+                    {
+                        ConfigureDataTable = (_) => new ExcelDataTableConfiguration()
+                        {
+                            UseHeaderRow = true
+                        }
+                    });
+
+                    // Select the specific sheet by name
+                    DataTable dataTable = result.Tables[sheetName];
+                    return dataTable;
+                }
+            }
+        }
+    }
+
+    public class CostAnalysis
+    {
+        public string? Id { get; set; }
+        public string? Name { get; set; }
+        public string? Type { get; set; }
+        public object? Location { get; set; }
+        public object? Sku { get; set; }
+        public object? ETag { get; set; }
+        public Properties? Properties { get; set; }
+    }
+
+    public class Properties
+    {
+        public string? NextLink { get; set; }
+        public Column[]? Columns { get; set; }
+        public object[][]? Rows { get; set; }
+    }
+
+    public class Column
+    {
+        public string? Name { get; set; }
+        public string? Type { get; set; }
+    }
+
+    public class Token
+    {
+        public string? token_type { get; set; }
+        public string? expires_in { get; set; }
+        public string? ext_expires_in { get; set; }
+        public string? expires_on { get; set; }
+        public string? not_before { get; set; }
+        public string? resource { get; set; }
+        public string? access_token { get; set; }
+    }
+}
+
+public class BlobHelper
+{
+    public static BlobContainerClient GetContainerClient()
+    {
+        try
+        {
+            string? storageAccountName = Environment.GetEnvironmentVariable("STORAGE_ACCOUNT_NAME");
+            string? containerName = Environment.GetEnvironmentVariable("CONTAINER_NAME");
+
+            BlobServiceClient blobServiceClient;
+
+            if (Convert.ToBoolean(Environment.GetEnvironmentVariable("IS_DEV_ENVIRONMENT")))
+            {
+                string blobConnectionString = string.Format(Environment.GetEnvironmentVariable("BLOB_CONNECTION_STRING"), storageAccountName, Environment.GetEnvironmentVariable("STORAGE_ACCESS_KEY"));
+                blobServiceClient = new BlobServiceClient(blobConnectionString);
+            }
+            else
+            {
+                var credentialOptions = new DefaultAzureCredentialOptions
+                {
+                    ManagedIdentityClientId = Environment.GetEnvironmentVariable("USER_ASSIGNED_CLIENT_ID"),
+
+                };
+                var saUri = $"https://{storageAccountName}.blob.core.windows.net";
+                blobServiceClient = new BlobServiceClient(new Uri(saUri), new DefaultAzureCredential(credentialOptions));
+            }
+            BlobContainerClient containerClient = blobServiceClient.GetBlobContainerClient(containerName);
+            return containerClient;
+        }
+        catch
+        {
+            throw;
+        }
+
+
+    }
+
+    public async Task<bool> UploadFileToBlobAsync(byte[] buffer, string fileName)
+    {
+        try
+        {
+            BlobClient blobclient = GetContainerClient().GetBlobClient(fileName);
+            bool exists = await blobclient.ExistsAsync();
+            if (exists)
+            {
+                await blobclient.DeleteIfExistsAsync();
+            }
+            using (var ms = new MemoryStream(buffer, true))
+            {
+                await blobclient.UploadAsync(ms);
+            }
+            return true;
+        }
+        catch
+        {
+            throw;
+        }
+    }
+
+    public async Task<MemoryStream> ReadFileFromBlobAsync(string fileName)
+    {
+        try
+        {
+            using (var ms = new MemoryStream())
+            {
+                await GetContainerClient().GetBlobClient(fileName).DownloadToAsync(ms);
+                ms.Position = 0;
+                return ms;
+                //FileStream outputStream = new FileStream(@"C:\\Users\\sudeol\\source\\Output.xlsx", FileMode.Create, FileAccess.Write);
+                //ms.CopyTo(outputStream);
+            }
+        }
+        catch
+        {
+            throw;
+        }
+    }
+}
+
+public class KeyVaultHelper
+{
+    public static async Task<string> GetKeyValue(string keyname)
+    {
+        string keyVaultUrl = $"https://{Environment.GetEnvironmentVariable("KEY_VAULT_NAME")}.vault.azure.net/";
+
+        var credentialOptions = new DefaultAzureCredentialOptions
+        {
+            ManagedIdentityClientId = Environment.GetEnvironmentVariable("USER_ASSIGNED_CLIENT_ID"),
+
+        };
+        var client = new SecretClient(new Uri(keyVaultUrl), new DefaultAzureCredential(credentialOptions));
+
+        try
+        {
+            KeyVaultSecret secret = await client.GetSecretAsync(keyname);
+
+            return secret.Value;
+        }
+        catch
+        {
+            throw;
+        }
+    }
+}
+
+public class ADXHelper
+{
+    private static readonly string? databaseName = Environment.GetEnvironmentVariable("ADX_DB_NAME");
+    private static readonly string? clusterName = Environment.GetEnvironmentVariable("ADX_CLUSTER_NAME");
+    private static readonly string? userAssignedMI = Environment.GetEnvironmentVariable("USER_ASSIGNED_CLIENT_ID");
+    private static readonly bool IsDevEnv = Convert.ToBoolean(Environment.GetEnvironmentVariable("IS_DEV_ENVIRONMENT"));
+    public async Task<DataTable> GetResourceTaggerDataAsync()
+    {
+        ValidateEnvironmentVariables(databaseName, clusterName, userAssignedMI);
+
+        string clusterUrl = $"https://{clusterName}.eastus2.kusto.windows.net";
+        string query = @"
+                            let MaxDate = toscalar(
+                                                    ResourceGroupTagger
+                                                    | summarize MaxDate = max(RGTaggerDate)
+                                                  );
+                            ResourceGroupTagger
+                            | where RGTaggerDate == MaxDate";
+
+        KustoConnectionStringBuilder kustoConnectionStringBuilder = IsDevEnv
+            ? new KustoConnectionStringBuilder(clusterUrl).WithAadApplicationTokenAuthentication((await new DefaultAzureCredential().GetTokenAsync(new Azure.Core.TokenRequestContext(new[] { "https://kusto.kusto.windows.net/" }))).Token)
+            : new KustoConnectionStringBuilder(clusterUrl).WithAadUserManagedIdentity(userAssignedMI);
+
+        using (var queryProvider = KustoClientFactory.CreateCslQueryProvider(kustoConnectionStringBuilder))
+        {
+            var clientRequestProperties = new ClientRequestProperties();
+            var reader = await queryProvider.ExecuteQueryAsync(databaseName, query, clientRequestProperties).ConfigureAwait(false);
+            var dt_RSTagger = new DataTable();
+            dt_RSTagger.Load(reader);
+
+            if (dt_RSTagger.Columns.Contains("SUBSCRIPTION"))
+            {
+                dt_RSTagger.Columns["SUBSCRIPTION"].ColumnName = "SubscriptionName";
+                return dt_RSTagger;
+            }
+            else
+            {
+                throw new InvalidDataException("ColumnName SUBSCRIPTION not found in ResourceTagger data table.");
+            }
+        }
+    }
+
+    private void ValidateEnvironmentVariables(params string?[] variables)
+    {
+        if (variables.Any(v => v == null))
+        {
+            throw new InvalidOperationException("Required environment variables must be set.");
+        }
+    }
+}
+
+public class Helper
+{
+    private static readonly string? CLIENT_ID = Environment.GetEnvironmentVariable("CLIENT_ID");
+    private static readonly string? RESOURCE = Environment.GetEnvironmentVariable("RESOURCE");
+    private static readonly string? TENANT_ID = Environment.GetEnvironmentVariable("TENANT_ID");
+    private static readonly string? AUTH_URL = Environment.GetEnvironmentVariable("AUTH_URL");
+
+    public async Task<string?> GetAccessToken()
+    {
+        ValidateEnvironmentVariables(CLIENT_ID, RESOURCE, TENANT_ID, AUTH_URL);
+
+        var ClientSecret = Convert.ToBoolean(Environment.GetEnvironmentVariable("IS_DEV_ENVIRONMENT"))
+            ? Environment.GetEnvironmentVariable("CLIENT_SECRET")
+            : await KeyVaultHelper.GetKeyValue("ClientSecret").ConfigureAwait(false);
+
+        var data = new Dictionary<string, string>
+        {
+            { "grant_type", "client_credentials" },
+            { "client_id", CLIENT_ID },
+            { "client_secret", ClientSecret },
+            { "resource", RESOURCE }
+        };
+
+        using (var client = new HttpClient())
+        {
+            var response = await client.PostAsync(AUTH_URL.Replace("{TenantID}", TENANT_ID), new FormUrlEncodedContent(data)).ConfigureAwait(false);
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var token = System.Text.Json.JsonSerializer.Deserialize<Token>(result);
+                return token?.access_token;
+            }
+            else
+            {
+                return null;
+            }
+        }
+    }
+
+    public async Task<bool> SendMessageOnTeamsAsync(DataTable dt)
+    {
+        var _generic = new GenericClass();
+        string csvdata = _generic.ConvertDataTableToMarkdownTable(dt).ToString();
+
+        using (HttpClient client = new HttpClient())
+        {
+            var payload = new { text = csvdata };
+            string jsonPayload = Newtonsoft.Json.JsonConvert.SerializeObject(payload);
+            StringContent content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+            HttpResponseMessage response = await client.PostAsync(Environment.GetEnvironmentVariable("WEBHOOK_URL"), content).ConfigureAwait(false);
+            if (response.IsSuccessStatusCode)
+            {
+                Console.WriteLine("Message sent successfully.");
+                return true;
+            }
+            else
+            {
+                Console.WriteLine("Error sending message: " + response.StatusCode);
+                return false;
+            }
+        }
+    }
+
+    private void ValidateEnvironmentVariables(params string?[] variables)
+    {
+        if (variables.Any(v => v == null))
+        {
+            throw new InvalidOperationException("Required environment variables must be set.");
+        }
+    }
+}
+
+public class ExcelHelper
+{
+    public static void ReadExcelFileToTable(Stream stream, DataTable dt_RSTagger)
+    {
+        try
+        {
+            using (var reader = ExcelReaderFactory.CreateReader(stream))
+            {
+                var result = reader.AsDataSet();
+                DataTable originalDataTable = result.Tables[0];
+                dt_RSTagger = new DataTable();
+                for (int i = 0; i < originalDataTable.Columns.Count; i++)
+                {
+                    dt_RSTagger.Columns.Add(originalDataTable.Rows[0][i].ToString());
+                }
+
+                for (int i = 1; i < originalDataTable.Rows.Count; i++)
+                {
+                    dt_RSTagger.Rows.Add(originalDataTable.Rows[i].ItemArray);
+                }
+            }
+        }
+        catch
+        {
+            throw;
+        }
+    }
+
+}
+
