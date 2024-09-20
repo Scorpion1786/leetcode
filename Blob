@@ -1,37 +1,28 @@
+using AppLibrary;
+using Microsoft.Azure.WebJobs;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
-using AppLibrary;
-using Azure.Storage.Blobs;
-using ExcelDataReader;
-using System.Net.Http.Headers;
-using System.Net.Http;
-using System.Text.Json;
-using System.Text;
-using System.Threading.Tasks;
-using Microsoft.Azure.WebJobs;
-using Microsoft.Azure.WebJobs.Host;
-using Microsoft.Extensions.Logging;
 using System.Linq;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace fn_ResourceTagger
 {
     public class fn_ResourceTagger_Blob
     {
-        private static readonly string CLIENT_ID = Environment.GetEnvironmentVariable("CLIENT_ID");
-        private static readonly string TENANT_ID = Environment.GetEnvironmentVariable("TENANT_ID");
-        private static readonly string AUTH_URL = Environment.GetEnvironmentVariable("AUTH_URL");
-        private static readonly string RESOURCE = Environment.GetEnvironmentVariable("RESOURCE");
         private static readonly string COST_MANAGEMENT_URL = Environment.GetEnvironmentVariable("COST_MANAGEMENT_URL");
         private static DataTable dt_costtable;
         private static DataTable dt_RSTagger;
         private static ILogger _log;
 
         [FunctionName("ResourceTagger_Blob")]
-        public static async Task Run([BlobTrigger("costexportmanual/{name}.xlsx", Connection = "AzureWebJobsStorage")] Stream myBlob, string name, ILogger log)
+        public static async Task Run([BlobTrigger("costexportmanual/{name}.xlsx", Connection = "BLOB_URI")] Stream myBlob, string name, ILogger log)
         {
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
             _log = log;
@@ -51,11 +42,7 @@ namespace fn_ResourceTagger
                         if (dt_result.Rows.Count > 0)
                         {
                             CleanDataTable(ref dt_result, "dt_NewResourceTable");
-                            bool isMsgSent = await SendMessageOnTeams(dt_result);
-                            if (isMsgSent)
-                            {
-                                _log.LogInformation($"Message Sent on Teams Channel Successfully....");
-                            }
+                            await SendMessageOnTeams(dt_result);
                         }
                         else
                         {
@@ -118,38 +105,19 @@ namespace fn_ResourceTagger
 
         private static async Task<string> GetAccessToken()
         {
-            var kvHelper = new KeyVaultHelper();
-            _log.LogInformation("Getting Access Token....");
-            var data = new Dictionary<string, string>
-                                                    {
-                                                        { "grant_type", "client_credentials" },
-                                                        { "client_id", CLIENT_ID },
-                                                        { "client_secret", await kvHelper.GetKeyValue("ClientSecret") },
-                                                        { "resource", RESOURCE }
-                                                    };
-            var content = new FormUrlEncodedContent(data);
-            using (var client = new HttpClient())
+            try
             {
-                try
-                {
-                    var response = await client.PostAsync(AUTH_URL.Replace("{TenantID}", TENANT_ID), content).ConfigureAwait(false);
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var result = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                        var token = System.Text.Json.JsonSerializer.Deserialize<Token>(result);
-                        _log.LogInformation($"Token acquired, Length {token.access_token.Length}....");
-                        return token.access_token;
-                    }
-                    else
-                    {
-                        return string.Empty;
-                    }
-                }
-                catch
-                {
-                    throw;
-                }
+                var helper = new Helper();
+                _log.LogInformation("Getting Access Token....");
+                var accessToken = await helper.GetAccessToken();
+                _log.LogInformation($"Token acquired, Length {accessToken.Length}....");
+                return accessToken;
             }
+            catch
+            {
+                throw;
+            }
+
         }
 
         private static async Task<bool> CreateCostReport(CostAnalysis _obj)
@@ -194,19 +162,9 @@ namespace fn_ResourceTagger
             try
             {
                 _log.LogInformation($"Uploading File {fileName} to blob");
-                BlobClient blobclient = BlobHelper.GetContainerClient().GetBlobClient(fileName);
-                bool exists = await blobclient.ExistsAsync();
-                if (exists)
-                {
-                    _log.LogInformation($"File {fileName} already exists, deleting the existing file....");
-                    await blobclient.DeleteIfExistsAsync();
-                    _log.LogInformation($"Uploading new file {fileName}");
-                }
-                using (var ms = new MemoryStream(buffer, true))
-                {
-                    await blobclient.UploadAsync(ms);
-                }
-                return true;
+                var blobhelper = new BlobHelper();
+                return await blobhelper.UploadFileToBlobAsync(buffer, fileName);
+
             }
             catch
             {
@@ -219,46 +177,10 @@ namespace fn_ResourceTagger
         {
             try
             {
-                _log.LogInformation($"Fetching Resource Tagger info from Blob");
-                BlobClient blobclient = BlobHelper.GetContainerClient().GetBlobClient("Resource_Group_Tagger.xlsx");
-                using (var ms = new MemoryStream())
-                {
-                    await blobclient.DownloadToAsync(ms);
-                    ms.Position = 0;
-                    ReadExcelFileToTable(ms);
-                    //FileStream outputStream = new FileStream(@"C:\\Users\\sudeol\\source\\Output.xlsx", FileMode.Create, FileAccess.Write);
-                    //ms.CopyTo(outputStream);
-                }
+                _log.LogInformation($"Fetching Resource Tagger info from Data Explorer");
+                ADXHelper adxHelper = new ADXHelper();
+                dt_RSTagger = await adxHelper.GetResourceTaggerDataAsync();
                 return true;
-            }
-            catch
-            {
-                throw;
-            }
-        }
-
-        private static void ReadExcelFileToTable(Stream stream)
-        {
-            try
-            {
-                _log.LogInformation($"Loading Resource Tagger info to DataTable...");
-                using (var reader = ExcelReaderFactory.CreateReader(stream))
-                {
-                    var result = reader.AsDataSet();
-                    DataTable originalDataTable = result.Tables[0];
-                    dt_RSTagger = new DataTable();
-                    for (int i = 0; i < originalDataTable.Columns.Count; i++)
-                    {
-                        dt_RSTagger.Columns.Add(originalDataTable.Rows[0][i].ToString());
-                    }
-
-                    for (int i = 1; i < originalDataTable.Rows.Count; i++)
-                    {
-                        dt_RSTagger.Rows.Add(originalDataTable.Rows[i].ItemArray);
-                    }
-                }
-                dt_RSTagger.Columns["SUBSCRIPTION"].ColumnName = "SubscriptionName";
-                dt_RSTagger.Columns["RESOURCE GROUP NAME"].ColumnName = "ResourceGroupName";
             }
             catch
             {
@@ -359,54 +281,14 @@ namespace fn_ResourceTagger
             }
         }
 
-        private static async Task<bool> SendMessageOnTeams(DataTable dt)
+        private static async Task SendMessageOnTeams(DataTable dt)
         {
             try
             {
+                var helper = new Helper();
                 _log.LogInformation($"Sending Message on Teams...");
-                var _generic = new GenericClass();
-                string csvdata = _generic.ConvertDataTableToMarkdownTable(dt).ToString();
-
-                using (HttpClient client = new HttpClient())
-                {
-                    var payload = new
-                    {
-                        text = csvdata
-                    };
-
-                    string jsonPayload = Newtonsoft.Json.JsonConvert.SerializeObject(payload);
-                    StringContent content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
-
-                    HttpResponseMessage response = await client.PostAsync(Environment.GetEnvironmentVariable("WEBHOOK_URL"), content);
-                    if (response.IsSuccessStatusCode)
-                    {
-                        Console.WriteLine("Message sent successfully.");
-                    }
-                    else
-                    {
-                        Console.WriteLine("Error sending message: " + response.StatusCode);
-                    }
-                }
-
-
-                // Read the CSV file and convert it to a base64 string
-                //string base64Csv = Convert.ToBase64String(Encoding.ASCII.GetBytes(csvdata.ToString()));
-
-                //// Send the payload to the Teams webhook
-                //using (HttpClient client = new HttpClient())
-                //{
-                //    var content = new StringContent(_generic.GetPayloadForTeam(base64Csv), Encoding.UTF8, "application/json");
-                //    HttpResponseMessage response = await client.PostAsync(Environment.GetEnvironmentVariable("WEBHOOK_URL"), content);
-                //    if (response.IsSuccessStatusCode)
-                //    {
-                //        Console.WriteLine("Message sent successfully.");
-                //    }
-                //    else
-                //    {
-                //        Console.WriteLine("Failed to send message. Status code: " + response.StatusCode);
-                //    }
-                //}
-                return true;
+                var result = await helper.SendMessageOnTeamsAsync(dt) ? "Message sent successfully." : "Error sending message: ";
+                _log.LogInformation(result);
             }
             catch
             {
